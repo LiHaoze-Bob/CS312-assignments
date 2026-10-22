@@ -2,6 +2,7 @@
 
 import json
 import os
+import tempfile
 from pathlib import Path
 
 import modal
@@ -207,8 +208,54 @@ def run_training(overrides: dict, smoke: bool):
         volume.commit()
 
 
+def download_training_result(result: dict, output_dir: str | Path | None = None):
+    """Download completed artifacts locally without loading PyTorch or allocating a GPU."""
+    run_name = result.get("run_name")
+    if (
+        not isinstance(run_name, str) or not run_name or run_name in {".", ".."}
+        or "/" in run_name or "\\" in run_name
+        or result.get("volume") != VOLUME_NAME
+        or result.get("volume_path") != f"/ckpts/{run_name}"
+    ):
+        raise ValueError("Expected a completed run on cs312-personal at /ckpts/RUN_NAME.")
+    root = Path(output_dir).expanduser().resolve() if output_dir else ROOT / "data/modal-results"
+    destination = root / run_name
+    if destination.is_symlink():
+        raise ValueError(f"Refusing to download into a symlink: {destination}")
+    filenames = ("model.pt", "latest.pt", "config.json", "metadata.json", "console.log", "result.json")
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+        for filename in filenames:
+            temporary = None
+            try:
+                print(f"Downloading {run_name}/{filename} ...", flush=True)
+                with tempfile.NamedTemporaryFile(
+                    dir=destination, prefix=f".{filename}.", suffix=".part", delete=False,
+                ) as fileobj:
+                    temporary = Path(fileobj.name)
+                    written = volume.read_file_into_fileobj(
+                        f"{result['volume_path']}/{filename}", fileobj,
+                    )
+                if written <= 0 or temporary.stat().st_size != written:
+                    raise OSError(f"Incomplete download of {filename}")
+                # Replace only after the complete file arrives; retain other local files.
+                temporary.replace(destination / filename)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Training completed and saved on Modal, but local download failed: {exc}. "
+            f"Cloud files remain on {VOLUME_NAME}:{result['volume_path']}. "
+            "Use modal volume get to retry the download without starting training."
+        ) from exc
+    print(f"Saved training results locally: {destination}", flush=True)
+    return destination
+
+
 @app.local_entrypoint()
-def main(action: str = "smoke", gpu: str = "H100", config: str = ""):
+def main(action: str = "smoke", gpu: str = "H100", config: str = "",
+         download: bool = True, output_dir: str = ""):
     """prepare: CPU data download; smoke: 32 steps; train: full recipe."""
     if action not in {"prepare", "smoke", "train"}:
         raise ValueError("--action must be prepare, smoke, or train")
@@ -231,3 +278,5 @@ def main(action: str = "smoke", gpu: str = "H100", config: str = ""):
         )
         result = runner.remote(overrides, action == "smoke")
     print(json.dumps(result, indent=2))
+    if action != "prepare" and download:
+        download_training_result(result, output_dir or None)

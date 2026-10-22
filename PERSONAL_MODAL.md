@@ -50,13 +50,25 @@ plus a training checkpoint. The test is setup evidence, not an A1 baseline.
 After checking the smoke result and your remaining budget:
 
 ```bash
-MODAL_PROFILE=haozeli2025 modal run --detach --env main modal_personal.py --action train
+MODAL_PROFILE=haozeli2025 ~/.local/bin/modal run --env main modal_personal.py --action train
 ```
 
 This uses the course's default 600,000 sequences, batch size 64, context length
 1024, learning rate 0.003, seed 42, and compilation, with W&B disabled. It runs
 9,375 optimizer steps on one H100, with a one-hour timeout and no retries.
 Checkpoints allow the same config to resume; completed models are reused.
+After a successful smoke or full run, the launcher automatically downloads
+`model.pt`, `latest.pt`, `config.json`, `metadata.json`, `console.log`, and
+`result.json` into `data/modal-results/RUN_NAME/` beside this script. Each file
+is downloaded to a temporary file and replaces its previous local copy only
+after the transfer finishes. Other local files and the cloud copies are kept.
+
+Keep this local command running until the download completes. A cloud run can
+outlive a disconnected detached client, but the automatic local download
+cannot run after the client exits or while the laptop is asleep. Omit
+`--detach` for the normal automatic-download workflow. Add `--no-download`
+to keep results only on the Volume, or `--output-dir PATH` to choose a different
+local parent directory. `--action prepare` does not download training results.
 
 For experiments, put ordinary `TrainConfig` overrides in a JSON file, e.g.:
 
@@ -78,21 +90,56 @@ MODAL_PROFILE=haozeli2025 modal environment billing summary main --for 'this mon
 
 Each run directory contains `console.log` with training and validation losses,
 `result.json` with completion/weight checks, `config.json`, `metadata.json`,
-`model.pt`, and `latest.pt`. Download a run using its printed Volume path:
+`model.pt`, and `latest.pt`. Completed runs download automatically. To recover
+a run after a disconnected client or a failed download, use its printed
+Volume path without starting training again:
 
 ```bash
 mkdir -p ./data/modal-results
-MODAL_PROFILE=haozeli2025 modal volume get --env main cs312-personal /ckpts/RUN_NAME ./data/modal-results/
+MODAL_PROFILE=haozeli2025 ~/.local/bin/modal volume get --env main --force cs312-personal /ckpts/RUN_NAME ./data/modal-results/
 ```
 
 Replace `RUN_NAME` with the directory name printed by the Volume listing. The
-existing destination directory receives a `RUN_NAME/` subdirectory. While a
+existing destination directory receives a `RUN_NAME/` subdirectory. `--force`
+refreshes existing local files for that run. While a
 run is still incomplete, only its logs and training checkpoint may be present;
 the native final model requires `model.pt`, `config.json`, and `metadata.json`.
 
 Set the Workspace usage limit to $30 in Usage & Billing if you want to stay
 within the monthly included compute. The course workspace's GPU-hour policy
 and shared data Volume do not apply to this personal runner.
+
+## Run P1 experiments directly from RUNS
+
+Edit `RUNS` in `experiments/a1_basics/p1_hyperparameters.py`. Each item is a
+dictionary of `TrainConfig` overrides, constructed into the actual config on
+Modal so the laptop still needs only the Modal SDK. For example:
+
+```python
+RUNS = [
+    {"learning_rate": 1e-3},
+    {"learning_rate": 9e-3},
+]
+```
+
+Launch the list from the assignments directory:
+
+```bash
+MODAL_PROFILE=haozeli2025 ~/.local/bin/modal run --env main -m \
+  experiments.a1_basics.p1_hyperparameters::p1
+```
+
+The launcher waits for each full training run before starting the next, using
+the same personal Volume, output paths, W&B-disabled settings, one-hour per-run
+timeout, and no-retry policy as `modal_personal.py`. Keep the terminal running
+until the list finishes. A failed experiment stops the list. Each completed
+run prints its result and downloads the six artifacts into
+`data/modal-results/RUN_NAME/` before starting the next run. Files also remain
+under `/ckpts/RUN_NAME` on `cs312-personal`. A download failure stops the list
+and reports the retained cloud location. Add `--no-download` to skip local
+downloads, or `--output-dir PATH` to change the local parent directory.
+Identical completed runs are reused by the training code; rerunning the list
+can resume interrupted checkpoints. No separate JSON files are needed.
 
 ## Inference with the trained d8 model
 
