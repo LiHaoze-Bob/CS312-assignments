@@ -34,7 +34,7 @@ app = modal.App("cs312-personal")
 volume = modal.Volume.from_name(
     VOLUME_NAME, environment_name=ENVIRONMENT, create_if_missing=True, version=2,
 )
-image = (
+base_image = (
     modal.Image.debian_slim(python_version="3.11")
     .uv_sync(uv_project_dir=str(ROOT))
     .workdir(REMOTE_REPO)
@@ -48,8 +48,9 @@ image = (
         "TORCHINDUCTOR_CACHE_DIR": "/tmp/torchinductor",
         "TRITON_CACHE_DIR": "/tmp/triton",
     })
-    .add_local_dir(ROOT, remote_path=REMOTE_REPO, ignore=ignore_source)
 )
+# Runtime source mounts must be the last layer; inference can extend base_image.
+image = base_image.add_local_dir(ROOT, remote_path=REMOTE_REPO, ignore=ignore_source)
 
 
 @app.function(image=image, volumes={MOUNT: volume}, cpu=2, memory=4096,
