@@ -1,0 +1,93 @@
+# Personal Modal workspace
+
+Workspace: `haozeli2025`; environment: `main`.
+
+This runner requires only the Modal CLI on your Mac. PyTorch and the course
+dependencies are installed in the remote Linux image from `uv.lock`.
+
+Setup completed on 2026-10-02: account/environment access, remote image build,
+CPU data preparation, published SHA-256 verification, and seeded-cache sample
+checks passed. GPU training has not been run.
+
+Run commands from this directory:
+
+```bash
+cd /Users/bob.li/Code/CS312-Stanford/code/assignments
+```
+
+## Prepare data once
+
+```bash
+MODAL_PROFILE=haozeli2025 modal run --env main modal_personal.py --action prepare
+```
+
+This CPU job downloads the public course dataset (about 18.31 GiB), checks its
+published sizes and SHA-256 values, and creates a seed-42 cache of the globally
+shuffled first 600,000 training rows. Validation uses the public validation
+split, matching the previous Kaggle fallback. Both caches persist on your own
+`cs312-personal` Volume. Subsequent preparation verifies and reuses the data.
+The release is pinned to `8d066a12a614ce8641c661874960bf8567bf0f19`, the
+same revision used for the verified Kaggle baseline. Preparation also compares
+three seeded cache rows with the corresponding original rows and writes
+`/data-ready.json` on the Volume.
+
+## Check training
+
+```bash
+MODAL_PROFILE=haozeli2025 modal run --env main modal_personal.py --action smoke
+```
+
+The test uses d8, 2,048 sequences, batch size 64, 32 optimizer steps, 64
+validation sequences, no compilation, and no W&B. It uses one H100, has a
+10-minute function timeout, and has no automatic retries. A successful result
+reports 32/32 completed steps, finite parameters, and saved native-model files
+plus a training checkpoint. The test is setup evidence, not an A1 baseline.
+
+## Full d8 baseline
+
+After checking the smoke result and your remaining budget:
+
+```bash
+MODAL_PROFILE=haozeli2025 modal run --detach --env main modal_personal.py --action train
+```
+
+This uses the course's default 600,000 sequences, batch size 64, context length
+1024, learning rate 0.003, seed 42, and compilation, with W&B disabled. It runs
+9,375 optimizer steps on one H100, with a one-hour timeout and no retries.
+Checkpoints allow the same config to resume; completed models are reused.
+
+For experiments, put ordinary `TrainConfig` overrides in a JSON file, e.g.:
+
+```json
+{"learning_rate": 0.001, "run_name_suffix": "lr-1e-3"}
+```
+
+Pass it with `--config experiment.json`. Run one experiment at a time initially.
+Nested custom model/dataset configs and custom metric loggers need a Python
+launcher rather than this JSON interface. Other seeds can use the full base
+dataset, but materialize their shuffled prefix during GPU startup.
+
+## Read results and usage
+
+```bash
+MODAL_PROFILE=haozeli2025 modal volume ls --env main cs312-personal /ckpts
+MODAL_PROFILE=haozeli2025 modal environment billing summary main --for 'this month'
+```
+
+Each run directory contains `console.log` with training and validation losses,
+`result.json` with completion/weight checks, `config.json`, `metadata.json`,
+`model.pt`, and `latest.pt`. Download a run using its printed Volume path:
+
+```bash
+mkdir -p ./data/modal-results
+MODAL_PROFILE=haozeli2025 modal volume get --env main cs312-personal /ckpts/RUN_NAME ./data/modal-results/
+```
+
+Replace `RUN_NAME` with the directory name printed by the Volume listing. The
+existing destination directory receives a `RUN_NAME/` subdirectory. While a
+run is still incomplete, only its logs and training checkpoint may be present;
+the native final model requires `model.pt`, `config.json`, and `metadata.json`.
+
+Set the Workspace usage limit to $30 in Usage & Billing if you want to stay
+within the monthly included compute. The course workspace's GPU-hour policy
+and shared data Volume do not apply to this personal runner.

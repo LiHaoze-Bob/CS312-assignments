@@ -4,6 +4,9 @@ This repo trains small autoregressive language models on a prepared tokenized
 DCLM dataset using Modal. This README is the setup guide for a student starting
 from scratch.
 
+For the personal workspace `haozeli2025` (outside the Stanford course workspace),
+use [PERSONAL_MODAL.md](PERSONAL_MODAL.md) and `modal_personal.py`.
+
 For the model, data, optimizer, loss, and checkpointing details, read
 [MACHINE_LEARNING.md](MACHINE_LEARNING.md).
 

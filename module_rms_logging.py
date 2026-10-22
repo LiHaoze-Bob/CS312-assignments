@@ -62,8 +62,14 @@ class ModuleRMSLogger:
         params = list(ctx.model.parameters())
         self.record("rms/global/parameter", params)
         self.record("rms/global/gradient", [p.grad for p in params])
+        # DataParallel hooks collect activation scalars from every replica.
+        # Reduce those scalars on the base model's device before adding them.
+        device = params[0].device if params else torch.device("cpu")
         stats = {
-            key: (sum(s for s, n in samples) / sum(n for s, n in samples)).sqrt()
+            key: (
+                sum(s.to(device=device) for s, n in samples)
+                / sum(n for s, n in samples)
+            ).sqrt()
             for key, samples in self.samples.items()
         }
         self.samples.clear()

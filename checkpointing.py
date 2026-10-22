@@ -211,6 +211,7 @@ class TrainingCheckpointer:
         latest_checkpoint_frequency=1000,
         keep_checkpoint_steps=(),
         metadata=None,
+        grad_scaler=None,
     ):
         self.run_dir = Path(run_dir)
         self.run_name = run_name
@@ -228,6 +229,7 @@ class TrainingCheckpointer:
         self.step_checkpoints_enabled = save_model and bool(self.keep_checkpoint_steps)
         self.enabled = self.latest_enabled or self.step_checkpoints_enabled
         self.metadata = metadata or {}
+        self.grad_scaler = grad_scaler
         self.manager = AsyncCheckpointManager(self.run_dir, enabled=self.enabled)
         self.latest_checkpoint = None
         self.manager.cleanup_stale_temp_files()
@@ -312,8 +314,13 @@ class TrainingCheckpointer:
             raise ValueError(f"Unsupported checkpoint version: {version}")
         model.load_state_dict(checkpoint["model_state"])
         optimizer.load_state_dict(checkpoint["optimizer_state"])
+        if self.grad_scaler is not None and "grad_scaler_state" in checkpoint:
+            self.grad_scaler.load_state_dict(checkpoint["grad_scaler_state"])
         completed_steps = int(checkpoint["completed_steps"])
-        set_scheduler_to_completed_steps(scheduler, completed_steps)
+        if "scheduler_state" in checkpoint:
+            scheduler.load_state_dict(checkpoint["scheduler_state"])
+        else:
+            set_scheduler_to_completed_steps(scheduler, completed_steps)
         restore_rng_state(checkpoint.get("rng_state"))
         return completed_steps
 
@@ -347,6 +354,7 @@ class TrainingCheckpointer:
         optimizer,
         wandb_run_id=None,
         force=False,
+        scheduler=None,
     ):
         if not self.enabled:
             return False
@@ -369,6 +377,10 @@ class TrainingCheckpointer:
             "wandb_run_id": wandb_run_id,
             "metadata": self.metadata,
         }
+        if self.grad_scaler is not None and self.grad_scaler.is_enabled():
+            payload["grad_scaler_state"] = self.grad_scaler.state_dict()
+        if scheduler is not None:
+            payload["scheduler_state"] = scheduler.state_dict()
         saved = False
         if should_save_latest:
             saved = self.manager.save_latest_async(

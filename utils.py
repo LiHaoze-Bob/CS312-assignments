@@ -287,8 +287,9 @@ def device_type(device):
 
 
 def autocast_context(precision="mp", device=None):
-    if precision == "mp" and device_type(device) == "cuda":
-        return torch.autocast("cuda", dtype=torch.bfloat16)
+    if precision in {"mp", "mp16"} and device_type(device) == "cuda":
+        dtype = torch.float16 if precision == "mp16" else torch.bfloat16
+        return torch.autocast("cuda", dtype=dtype)
     return nullcontext()
 
 
@@ -297,10 +298,11 @@ def precision_config(precision):
     return {
         "precision": precision,
         "param_precision": "bf16" if precision == "bf16" else "fp32",
-        "compute_precision": "fp32" if precision == "fp32" else "bf16",
+        "compute_precision": "fp32" if precision == "fp32" else "fp16" if precision == "mp16" else "bf16",
         "loss_precision": "fp32",
         "optimizer_state_precision": "optimizer_default" if precision == "bf16" else "fp32",
-        "uses_autocast": precision == "mp",
+        "uses_autocast": precision in {"mp", "mp16"},
+        "uses_grad_scaler": precision == "mp16",
     }
 
 

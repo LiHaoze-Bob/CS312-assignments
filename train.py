@@ -86,6 +86,7 @@ class TrainConfig:
     latest_checkpoint_frequency: int | None = 1000
     keep_checkpoint_steps: tuple[int, ...] = field(default_factory=tuple)
     torch_compile_mode: str = "reduce-overhead"
+    compile_model: bool = True
     model_dir: str | Path = MODEL_DIR
     wandb_entity: str = WANDB_ENTITY
     wandb_project: str = WANDB_PROJECT
@@ -391,6 +392,10 @@ def train(config):
     train_start_time = time.perf_counter()
     config = checked_train_config(config)
     configure_deterministic_training(config.deterministic)
+    grad_scaler = torch.amp.GradScaler(
+        "cuda", enabled=config.precision == "mp16" and torch.cuda.is_available(),
+        init_scale=4096.0,
+    )
     metric_loggers = LoggerManager(
         config.metric_loggers,
         enabled=config.wandb_online,
@@ -421,10 +426,13 @@ def train(config):
         resume_from_checkpoint=config.resume_from_checkpoint,
         latest_checkpoint_frequency=config.latest_checkpoint_frequency,
         keep_checkpoint_steps=config.keep_checkpoint_steps,
+        grad_scaler=grad_scaler,
     )
 
     num_cuda_devices = torch.cuda.device_count()
-    torch_compile_enabled = num_cuda_devices == 1 and config.num_micro_batches == 1
+    torch_compile_enabled = (
+        config.compile_model and num_cuda_devices == 1 and config.num_micro_batches == 1
+    )
     torch_compile_mode = config.torch_compile_mode if torch_compile_enabled else None
     device = "cuda:0" if num_cuda_devices > 0 else "cpu"
 
@@ -598,8 +606,9 @@ def train(config):
                         current_loss_tensor = detached_loss
                     else:
                         current_loss_tensor = current_loss_tensor + detached_loss
-                    loss.backward()
+                    grad_scaler.scale(loss).backward()
 
+                grad_scaler.unscale_(optimizer)
                 train_logger_stats = metric_loggers.collect(
                     AFTER_BACKWARD,
                     LoggerContext(
@@ -619,8 +628,13 @@ def train(config):
                         base_model.parameters(), max_norm=config.grad_norm
                     )
 
-                optimizer.step()
-                scheduler.step()
+                old_scale = grad_scaler.get_scale()
+                grad_scaler.step(optimizer)
+                grad_scaler.update()
+                if grad_scaler.get_scale() >= old_scale:
+                    scheduler.step()
+                else:
+                    print(f"Step {step + 1}: FP16 gradient overflow; optimizer update skipped.")
 
                 completed_steps = step + 1
                 last_completed_step = completed_steps
@@ -711,6 +725,7 @@ def train(config):
                     optimizer=optimizer,
                     wandb_run_id=wandb_run_id,
                     force=interrupt_state.stop_requested,
+                    scheduler=scheduler,
                 )
                 if first_step_seconds is None:
                     first_step_seconds = time.perf_counter() - step_start_time

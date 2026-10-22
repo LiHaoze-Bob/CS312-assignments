@@ -3,7 +3,7 @@ from dataclasses import asdict, dataclass
 import torch
 
 
-VALID_PRECISIONS = {"fp32", "bf16", "mp"}
+VALID_PRECISIONS = {"fp32", "bf16", "mp", "mp16"}
 DEFAULT_VOCAB_SIZE = 4096
 DEFAULT_CONTEXT_LENGTH = 1024
 DEFAULT_MAX_POSITION_EMBEDDINGS = 131_072
